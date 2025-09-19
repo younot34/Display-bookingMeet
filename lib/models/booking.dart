@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 class Booking {
   final String id;
   final String roomName;
@@ -13,7 +11,7 @@ class Booking {
   final bool isScanEnabled;
   final String? scanInfo;
   final String status;
-  String? location;
+  late final String? location;
 
   Booking({
     required this.id,
@@ -27,7 +25,7 @@ class Booking {
     required this.meetingTitle,
     this.isScanEnabled = false,
     this.scanInfo,
-    this.status = "upcoming",
+    this.status = "In Queue",
     this.location,
   });
 
@@ -55,39 +53,54 @@ class Booking {
       meetingTitle: meetingTitle,
       isScanEnabled: isScanEnabled,
       scanInfo: scanInfo,
-
     );
   }
 
-  Map<String, dynamic> toMap() {
+  Map<String, dynamic> toJson() {
+    String fixedTime = time.contains(":") && time.split(":").length == 2
+        ? "$time:00"
+        : time;
+
+    // ubah date menjadi YYYY-MM-DD dengan 2 digit untuk bulan & hari
+    List<String> parts = date.contains("/") ? date.split("/") : date.split("-");
+    // jika format awal dd/mm/yyyy
+    String day = parts[0].padLeft(2, '0');
+    String month = parts[1].padLeft(2, '0');
+    String year = parts[2];
+
+    String fixedDate = "$year-$month-$day";
+
     return {
-      "roomName": roomName,
-      "date": date,
-      "time": time,
-      "duration": duration,
-      "numberOfPeople": numberOfPeople,
-      "equipment": equipment,
-      "hostName": hostName,
-      "meetingTitle": meetingTitle,
-      "isScanEnabled": isScanEnabled,
-      "scanInfo": scanInfo,
+      'room_name': roomName,
+      'date': fixedDate,
+      'time': fixedTime,
+      'duration': duration,
+      'number_of_people': numberOfPeople,
+      'equipment': equipment,
+      'host_name': hostName,
+      'meeting_title': meetingTitle,
+      'is_scan_enabled': isScanEnabled,
+      'scan_info': scanInfo,
+      'status': status,
+      'location': location,
     };
   }
 
-  factory Booking.fromFirestore(DocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
+  factory Booking.fromJson(Map<String, dynamic> json) {
     return Booking(
-      id: doc.id,
-      roomName: data["roomName"] ?? "",
-      date: data["date"] ?? "",
-      time: data["time"] ?? "",
-      duration: data["duration"],
-      numberOfPeople: data["numberOfPeople"],
-      equipment: List<String>.from(data["equipment"] ?? []),
-      hostName: data["hostName"] ?? "",
-      meetingTitle: data["meetingTitle"] ?? "",
-      isScanEnabled: data["isScanEnabled"] ?? false,
-      scanInfo: data["scanInfo"],
+      id: json['id'].toString(),
+      roomName: json['room_name'],
+      date: json['date'],
+      time: json['time'],
+      duration: json['duration'],
+      numberOfPeople: json['number_of_people'],
+      equipment: List<String>.from(json['equipment'] ?? []),
+      hostName: json['host_name'],
+      meetingTitle: json['meeting_title'],
+      isScanEnabled: json['is_scan_enabled'] ?? false,
+      scanInfo: json['scan_info'],
+      status: json['status'],
+      location: json['location'],
     );
   }
   Booking copyWith({

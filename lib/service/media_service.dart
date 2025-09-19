@@ -1,63 +1,48 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:http/http.dart' as http;
+import '../config/api_config.dart';
 import '../models/media.dart';
 
-
 class MediaService {
-  final CollectionReference mediaCollection =
-  FirebaseFirestore.instance.collection('mediaLibrary');
+  final String url = "${ApiConfig.baseUrl}/media";
 
   Future<List<Media>> getAllMedia() async {
-    final snapshot = await mediaCollection.get();
-    return snapshot.docs.map((doc) => Media.fromFirestore(doc)).toList();
-  }
-
-  // Ubah uploadImage supaya simpan base64 di Firestore
-  Future<String> uploadImage(File file, String fileName) async {
-    try {
-      if (fileName.trim().isEmpty) {
-        throw Exception("Filename tidak boleh kosong");
-      }
-
-      print("📤 Uploading file: ${file.path}");
-
-      final bytes = await file.readAsBytes();
-      final base64Image = base64Encode(bytes);
-
-      // Simpan ke dokumen sementara di Firestore untuk mendapatkan URL (opsional)
-      final docRef = await mediaCollection.add({
-        'fileName': fileName,
-        'imageData': base64Image,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      print("✅ Upload success: docId=${docRef.id}");
-      // Return docId sebagai "URL" sementara untuk akses nanti
-      return docRef.id;
-    } catch (e) {
-      print("❌ Upload error: $e");
-      rethrow;
+    final response = await http.get(Uri.parse(url));
+    if (response.statusCode == 200) {
+      final List data = jsonDecode(response.body);
+      return data.map((e) => Media.fromJson(e)).toList();
     }
+    throw Exception("Failed to fetch media");
   }
 
   Future<Media> createMedia(Media media) async {
-    final docRef = await mediaCollection.add(media.toMap());
-    final newMedia = Media(
-      id: docRef.id,
-      logoUrl: media.logoUrl,
-      subLogoUrl: media.subLogoUrl,
+    final response = await http.post(
+      Uri.parse(url),
+      headers: ApiConfig.headers,
+      body: jsonEncode(media.toJson()),
     );
-    await docRef.update(newMedia.toMap()); // simpan dengan id yang benar
-    return newMedia;
+    if (response.statusCode == 201) {
+      return Media.fromJson(jsonDecode(response.body));
+    }
+    throw Exception("Failed to create media");
   }
 
   Future<void> updateMedia(Media media) async {
-    if (media.id.isEmpty) throw Exception("Media id tidak boleh kosong");
-    await mediaCollection.doc(media.id).update(media.toMap());
+    final response = await http.put(
+      Uri.parse("$url/${media.id}"),
+      headers: ApiConfig.headers,
+      body: jsonEncode(media.toJson()),
+    );
+    if (response.statusCode != 200) {
+      throw Exception("Failed to update media");
+    }
   }
 
   Future<void> deleteMedia(String id) async {
-    await mediaCollection.doc(id).delete();
+    final response = await http.delete(Uri.parse("$url/$id"));
+    if (response.statusCode != 204) {
+      throw Exception("Failed to delete media");
+    }
   }
 }

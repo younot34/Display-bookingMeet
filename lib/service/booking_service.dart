@@ -1,105 +1,71 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import '../config/api_config.dart';
 import '../models/booking.dart';
 
 class BookingService {
-  final CollectionReference _collection =
-  FirebaseFirestore.instance.collection("bookings");
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  CollectionReference get _bookingsRef => _firestore.collection('bookings');
+  final String url = "${ApiConfig.baseUrl}/bookings";
 
-  Future<List<Booking>> getAllBookings() async {
-    final snapshot = await _collection.get();
-    return snapshot.docs.map((doc) => Booking.fromFirestore(doc)).toList();
-  }
-  static Future<List<Booking>> getBookingsByRoom(String roomName) async {
-    final snapshot = await FirebaseFirestore.instance
-        .collection("bookings")
-        .where("roomName", isEqualTo: roomName)
-        .get();
-    return snapshot.docs.map((doc) => Booking.fromFirestore(doc)).toList();
-  }
-
-  Stream<List<Booking>> streamBookings({String? roomName, DateTime? date}) {
-    Query query = _bookingsRef;
-
-    if (roomName != null) {
-      query = query.where('roomName', isEqualTo: roomName);
+  Future<List<Booking>> getBookingsByRoom(String roomName) async {
+    final response = await http.get(Uri.parse("${ApiConfig.baseUrl}/bookings/room/$roomName"));
+    if (response.statusCode == 200) {
+      final List data = jsonDecode(response.body);
+      return data.map((e) => Booking.fromJson(e)).toList();
     }
+    throw Exception("Failed to fetch bookings by room");
+  }
 
-    if (date != null) {
-      final startOfDay = DateTime(date.year, date.month, date.day);
-      final endOfDay = startOfDay.add(const Duration(days: 1));
+  Stream<List<Booking>> streamBookingsByRoom(String roomName, {Duration interval = const Duration(seconds: 5)}) {
+    return Stream.periodic(interval).asyncMap((_) => getBookingsByRoom(roomName));
+  }
 
-      query = query
-          .where('dateTime', isGreaterThanOrEqualTo: startOfDay)
-          .where('dateTime', isLessThan: endOfDay);
+  Future<Booking> createBooking(Booking booking) async {
+    final response = await http.post(
+      Uri.parse(url),
+      headers: ApiConfig.headers,
+      body: jsonEncode(booking.toJson()),
+    );
+    if (response.statusCode == 201) {
+      return Booking.fromJson(jsonDecode(response.body));
     }
-
-    return query.snapshots().map((snap) =>
-        snap.docs.map((doc) => Booking.fromFirestore(doc)).toList());
-  }
-
-  Stream<List<Booking>> streamBookingsByRoom(String roomName) {
-    // jika ingin order by date/time, pastikan fieldnya tersimpan dalam format
-    // yang bisa di-order (mis. Timestamp / ISO), atau sesuaikan query.
-    final query = _bookingsRef.where('roomName', isEqualTo: roomName);
-    return query.snapshots().map((snap) {
-      return snap.docs.map((doc) {
-        // gunakan factory dari model Booking (harus ada)
-        return Booking.fromFirestore(doc);
-      }).toList();
-    });
-  }
-  Future<Booking> saveBooking(Booking booking) async {
-    final data = {
-      "roomName": booking.roomName,
-      "date": booking.date,
-      "time": booking.time,
-      "duration": booking.duration,
-      "numberOfPeople": booking.numberOfPeople,
-      "equipment": booking.equipment,
-      "hostName": booking.hostName,
-      "meetingTitle": booking.meetingTitle,
-      "isScanEnabled": booking.isScanEnabled,
-      "scanInfo": booking.scanInfo,
-    };
-
-    // kalau booking.id kosong → buat dokumen baru
-    if (booking.id.isEmpty) {
-      final docRef = await _bookingsRef.add(data);
-      return booking.copyWith(id: docRef.id);
-    } else {
-      // kalau ada id → update
-      await _bookingsRef.doc(booking.id).set(data);
-      return booking;
-    }
-  }
-  /// Pindahkan booking ke history (misal setelah selesai)
-  Future<void> moveToHistory(Booking booking) async {
-    final historyRef = _firestore.collection('history');
-    await historyRef.doc(booking.id).set({
-      "roomName": booking.roomName,
-      "date": booking.date,
-      "time": booking.time,
-      "duration": booking.duration,
-      "numberOfPeople": booking.numberOfPeople,
-      "equipment": booking.equipment,
-      "hostName": booking.hostName,
-      "meetingTitle": booking.meetingTitle,
-      "isScanEnabled": booking.isScanEnabled,
-      "scanInfo": booking.scanInfo,
-      "endedAt": FieldValue.serverTimestamp(),
-    });
-    await _bookingsRef.doc(booking.id).delete();
+    print("JSON dikirim: ${booking.toJson()}");
+    throw Exception("Failed to create booking");
   }
 
   Future<Booking> updateBooking(Booking booking) async {
-    await FirebaseFirestore.instance
-        .collection("bookings")
-        .doc(booking.id)
-        .update(booking.toMap());
-    return booking;
+    final response = await http.put(
+      Uri.parse("$url/${booking.id}"),
+      headers: ApiConfig.headers,
+      body: jsonEncode(booking.toJson()),
+    );
+    if (response.statusCode == 200) {
+      return Booking.fromJson(jsonDecode(response.body));
+    }
+    throw Exception("Failed to update booking");
   }
+
+  Future<void> deleteBooking(int id) async {
+    final response = await http.delete(Uri.parse("$url/$id"));
+    if (response.statusCode != 204) {
+      throw Exception("Failed to delete booking");
+    }
+  }
+
+  Future<Booking> saveBooking(Booking booking) async {
+    return await createBooking(booking);
+  }
+
+  Future<void> endBooking(int id) async {
+    final response = await http.post(
+      Uri.parse("${ApiConfig.baseUrl}/bookings/$id/end"),
+      headers: {'Accept': 'application/json'},
+    );
+
+    if (response.statusCode != 200) {
+      print("Failed to end booking, status: ${response.statusCode}, body: ${response.body}");
+      throw Exception("Failed to end booking");
+    }
+  }
+
 
 }

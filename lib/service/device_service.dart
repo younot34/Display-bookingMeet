@@ -1,68 +1,64 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import '../config/api_config.dart';
 import '../models/device.dart';
 
-class DeviceFirestoreService {
-  final CollectionReference _collection =
-  FirebaseFirestore.instance.collection("devices");
-
-  Future<String> getLocation(String deviceName) async {
-    try {
-      final snapshot = await _collection
-          .where("name", isEqualTo: deviceName) // pastikan field "name" sama dengan nama device
-          .limit(1)
-          .get();
-
-      if (snapshot.docs.isNotEmpty) {
-        final data = snapshot.docs.first.data() as Map<String, dynamic>;
-        return data["location"] ?? "Unknown Location";
-      } else {
-        return "Unknown Location";
-      }
-    } catch (e) {
-      print("Failed to get location: $e");
-      return "Unknown Location";
-    }
-  }
-
-  Stream<String> streamDeviceLocation(String deviceName) {
-    return _collection
-        .where("name", isEqualTo: deviceName)
-        .limit(1)
-        .snapshots()
-        .map((snapshot) {
-      if (snapshot.docs.isNotEmpty) {
-        final data = snapshot.docs.first.data() as Map<String, dynamic>;
-        return data["location"] ?? "Unknown Location";
-      } else {
-        return "Unknown Location";
-      }
-    });
-  }
-  final CollectionReference devicesCollection =
-  FirebaseFirestore.instance.collection("devices");
+class DeviceService {
+  final String url = "${ApiConfig.baseUrl}/devices";
 
   Future<List<Device>> getDevices() async {
-    final snapshot = await devicesCollection.get();
-    return snapshot.docs.map((doc) => Device.fromFirestore(doc)).toList();
+    final response = await http.get(Uri.parse(url));
+    if (response.statusCode == 200) {
+      final List data = jsonDecode(response.body);
+      return data.map((e) => Device.fromJson(e)).toList();
+    }
+    throw Exception("Failed to fetch devices");
   }
 
-  Stream<List<Device>> getDevicesStream() {
-    return FirebaseFirestore.instance
-        .collection('devices')
-        .snapshots()
-        .map((snapshot) =>
-        snapshot.docs.map((doc) => Device.fromFirestore(doc)).toList());
+  Stream<List<Device>> getDevicesStream({Duration interval = const Duration(seconds: 2)}) {
+    return Stream.periodic(interval).asyncMap((_) => getDevices());
   }
 
-  Future<void> createDevice(Device device) async {
-    await devicesCollection.add(device.toMap());
+  Future<String> getLocation(String roomName) async {
+    final response = await http.get(Uri.parse("$url?room_name=$roomName"));
+    if (response.statusCode == 200) {
+      final List data = jsonDecode(response.body);
+      if (data.isNotEmpty) {
+        final device = Device.fromJson(data.first);
+        return device.location ?? "Unknown";
+      }
+      return "Unknown";
+    }
+    throw Exception("Failed to fetch location for $roomName");
+  }
+
+  Future<Device> createDevice(Device device) async {
+    final response = await http.post(
+      Uri.parse(url),
+      headers: ApiConfig.headers,
+      body: jsonEncode(device.toJson()),
+    );
+    if (response.statusCode == 201) {
+      return Device.fromJson(jsonDecode(response.body));
+    }
+    throw Exception("Failed to create device");
   }
 
   Future<void> updateDevice(Device device) async {
-    await devicesCollection.doc(device.id).update(device.toMap());
+    final response = await http.put(
+      Uri.parse("$url/${device.id}"),
+      headers: ApiConfig.headers,
+      body: jsonEncode(device.toJson()),
+    );
+    if (response.statusCode != 200) {
+      throw Exception("Failed to update device");
+    }
   }
 
   Future<void> deleteDevice(String id) async {
-    await devicesCollection.doc(id).delete();
+    final response = await http.delete(Uri.parse("$url/$id"));
+    if (response.statusCode != 204) {
+      throw Exception("Failed to delete device");
+    }
   }
 }

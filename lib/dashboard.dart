@@ -24,7 +24,6 @@ class _DashboardPageState extends State<DashboardPage> {
   DateTime? selectedDate;
   List<Device> devices = [];
   Map<String, List<Booking>> bookingsByRoom = {};
-  final DeviceFirestoreService deviceService = DeviceFirestoreService();
   final BookingService bookingService = BookingService();
   String? logoUrlMain;
   String? logoUrlSub;
@@ -51,7 +50,6 @@ class _DashboardPageState extends State<DashboardPage> {
       Map<String, List<Booking>> bookingsByRoom) {
     List<Map<String, dynamic>> allSlots = [];
 
-    // urutkan devices berdasarkan roomName (numeric kalau bisa)
     devices.sort((a, b) {
       return int.tryParse(a.roomName)?.compareTo(
           int.tryParse(b.roomName) ?? 0) ??
@@ -63,14 +61,11 @@ class _DashboardPageState extends State<DashboardPage> {
       final bookings = bookingsByRoom[device.roomName] ?? [];
       final slots = buildSlots(device, bookings);
 
-      // tambahkan index room
       for (var slot in slots) {
         slot["roomIndex"] = i;
       }
       allSlots.addAll(slots);
     }
-
-
     return allSlots;
   }
 
@@ -100,7 +95,7 @@ class _DashboardPageState extends State<DashboardPage> {
     });
 
     final now = DateTime.now();
-    DateTime lastEnd = DateTime(now.year, now.month, now.day, 0, 0); // mulai dari jam 00:00
+    DateTime lastEnd = DateTime(now.year, now.month, now.day, 0, 0);
 
     if (bookings.isEmpty) {
       final endOfDay = DateTime(now.year, now.month, now.day, 23, 59);
@@ -123,8 +118,6 @@ class _DashboardPageState extends State<DashboardPage> {
       final start = _parseBookingTime(booking);
       final duration = int.tryParse(booking.duration ?? "0") ?? 0;
       final end = start.add(Duration(minutes: duration));
-
-      // tambahkan slot kosong jika ada gap sebelum booking (buffer 30 menit)
       final gapStart = lastEnd.isAfter(now) ? lastEnd : now;
       final gapEnd = start.subtract(const Duration(minutes: 30));
       if (gapStart.isBefore(gapEnd)) {
@@ -142,7 +135,6 @@ class _DashboardPageState extends State<DashboardPage> {
         }
       }
 
-      // tampilkan booking
       slots.add({
         "room": device.roomName,
         "title": booking.meetingTitle,
@@ -154,10 +146,9 @@ class _DashboardPageState extends State<DashboardPage> {
         "${getBookingStatus(booking)}      ${_formatTime(start)}-${_formatTime(end)}",
       });
 
-      lastEnd = end.add(const Duration(minutes: 30)); // buffer 30 menit setelah booking
+      lastEnd = end.add(const Duration(minutes: 30));
     }
 
-    // slot kosong setelah booking terakhir sampai jam 24:00
     final endOfDay = DateTime(now.year, now.month, now.day, 23, 59);
     if (lastEnd.isBefore(endOfDay)) {
       final gapStart = lastEnd.isAfter(now) ? lastEnd : now;
@@ -174,7 +165,6 @@ class _DashboardPageState extends State<DashboardPage> {
         });
       }
     }
-
     return slots;
   }
 
@@ -183,7 +173,6 @@ class _DashboardPageState extends State<DashboardPage> {
     final d = int.parse(parts[0]);
     final m = int.parse(parts[1]);
     final y = int.parse(parts[2]);
-
     final t = b.time.split(":");
     final h = int.parse(t[0]);
     final min = int.parse(t[1]);
@@ -197,18 +186,17 @@ class _DashboardPageState extends State<DashboardPage> {
 
   void _checkAndMoveFinishedBookings() async {
     final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
 
     for (var roomBookings in bookingsByRoom.values) {
       for (var booking in roomBookings) {
-        final bookingDate = _parseBookingTime(booking);
-        final bookingOnlyDate = DateTime(bookingDate.year, bookingDate.month, bookingDate.day);
+        final startTime = _parseBookingTime(booking);
+        final durationMinutes = int.tryParse(booking.duration ?? "0") ?? 0;
+        final endTime = startTime.add(Duration(minutes: durationMinutes));
 
-        if (bookingOnlyDate.isBefore(today)) {
-          // Booking sudah lewat hari ini, pindahkan ke history
+        if (now.isAfter(endTime)) {
           try {
-            await bookingService.moveToHistory(booking);
-            print("Booking ${booking.id} dipindahkan ke history (tanggal sudah lewat).");
+            await bookingService.endBooking(int.parse(booking.id));
+            print("Booking ${booking.id} dipindahkan ke history (sudah selesai).");
           } catch (e) {
             print("Gagal memindahkan booking ${booking.id} ke history: $e");
           }
@@ -260,7 +248,6 @@ class _DashboardPageState extends State<DashboardPage> {
           );
           _currentPage = nextPage;
         } else {
-          // balik ke page pertama
           _pageController.animateToPage(
             0,
             duration: const Duration(milliseconds: 600),
@@ -272,8 +259,8 @@ class _DashboardPageState extends State<DashboardPage> {
     });
     Timer.periodic(const Duration(seconds: 1), (timer) async {
       if (!mounted) return;
-      _checkAndMoveFinishedBookings(); // pindahkan yang selesai
-      setState(() {}); // update UI untuk ongoing/in queue
+      _checkAndMoveFinishedBookings();
+      setState(() {});
     });
   }
 
@@ -394,7 +381,7 @@ class _DashboardPageState extends State<DashboardPage> {
         // content
         Expanded(
           child: StreamBuilder<List<Device>>(
-            stream: deviceService.getDevicesStream(),
+            stream: DeviceService().getDevicesStream(),
             builder: (context, deviceSnapshot) {
               final devices = deviceSnapshot.data ?? [];
               if (devices.isEmpty)
@@ -450,11 +437,6 @@ class _DashboardPageState extends State<DashboardPage> {
                           Expanded(
                             child: Column(
                               children: pageSlots
-                                  .where((s) {
-                                    final status = s["status"] ?? "";
-                                    // sembunyikan kalau status "Finished"
-                                    return !status.startsWith("Finished");
-                                  })
                                   .mapIndexed((i, s) {
                                 final isAvailable = s["title"] == "Available";
                                 final status = s["status"] ?? "";

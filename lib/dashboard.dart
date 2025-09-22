@@ -1,17 +1,16 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
-import 'package:loby/service/booking_service.dart';
-import 'package:loby/service/device_service.dart';
-import 'package:loby/service/media_service.dart';
-import '../models/device.dart';
-import '../models/booking.dart';
-import 'BookingTile.dart';
-import 'logo.dart';
 import 'package:intl/intl.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:auto_size_text/auto_size_text.dart';
 import 'package:collection/collection.dart';
+import '../models/device.dart';
+import '../models/booking.dart';
+import '../service/booking_service.dart';
+import '../service/device_service.dart';
+import '../service/media_service.dart';
+import 'BookingTile.dart';
+import 'logo.dart';
 
 class DashboardPage extends StatefulWidget {
   @override
@@ -19,224 +18,27 @@ class DashboardPage extends StatefulWidget {
 }
 
 class _DashboardPageState extends State<DashboardPage> {
-  String selectedMenu = "Reporting";
-  String? selectedRoom;
-  DateTime? selectedDate;
-  List<Device> devices = [];
-  Map<String, List<Booking>> bookingsByRoom = {};
-  final BookingService bookingService = BookingService();
   String? logoUrlMain;
   String? logoUrlSub;
-  late Timer _timer;
+
   String _dateString = "";
   String _timeString = "";
-  late final Stream<int> _clockStream;
+
+  late Timer _timer;
   late PageController _pageController;
-  int _currentPage = 0;
   Timer? _pageTimer;
+  int _currentPage = 0;
   int _totalPages = 1;
 
-  Future<void> _loadMediaLogos() async {
-    final mediaList = await MediaService().getAllMedia();
-    if (mediaList.isNotEmpty) {
-      setState(() {
-        logoUrlMain = mediaList[0].logoUrl;
-        logoUrlSub = mediaList[0].subLogoUrl;
-      });
-    }
-  }
-
-  List<Map<String, dynamic>> buildAllSlots(List<Device> devices,
-      Map<String, List<Booking>> bookingsByRoom) {
-    List<Map<String, dynamic>> allSlots = [];
-
-    devices.sort((a, b) {
-      return int.tryParse(a.roomName)?.compareTo(
-          int.tryParse(b.roomName) ?? 0) ??
-          a.roomName.compareTo(b.roomName);
-    });
-
-    for (var i = 0; i < devices.length; i++) {
-      final device = devices[i];
-      final bookings = bookingsByRoom[device.roomName] ?? [];
-      final slots = buildSlots(device, bookings);
-
-      for (var slot in slots) {
-        slot["roomIndex"] = i;
-      }
-      allSlots.addAll(slots);
-    }
-    return allSlots;
-  }
-
-  List<List<Map<String, dynamic>>> paginateSlots(
-      List<Map<String, dynamic>> slots, int rowsPerPage) {
-    List<List<Map<String, dynamic>>> pages = [];
-    for (var i = 0; i < slots.length; i += rowsPerPage) {
-      pages.add(slots.sublist(
-        i,
-        (i + rowsPerPage > slots.length) ? slots.length : i + rowsPerPage,
-      ));
-    }
-    return pages;
-  }
-
-  List<Map<String, dynamic>> buildSlots(Device device, List<Booking> bookings) {
-    List<Map<String, dynamic>> slots = [];
-
-    final locationParts = device.location.split(" - ");
-    final building = locationParts.isNotEmpty ? locationParts[0].trim() : "";
-    final floor = locationParts.length > 1 ? locationParts[1].trim() : "";
-
-    bookings.sort((a, b) {
-      final aTime = _parseBookingTime(a);
-      final bTime = _parseBookingTime(b);
-      return aTime.compareTo(bTime);
-    });
-
-    final now = DateTime.now();
-    DateTime lastEnd = DateTime(now.year, now.month, now.day, 0, 0);
-
-    if (bookings.isEmpty) {
-      final endOfDay = DateTime(now.year, now.month, now.day, 23, 59);
-      final durationMinutes = endOfDay.difference(now).inMinutes;
-      if (durationMinutes >= 30) {
-        slots.add({
-          "room": device.roomName,
-          "title": "Available",
-          "building": building,
-          "floor": floor,
-          "space": device.capacity.toString(),
-          "host": "",
-          "status": "Available         now-${_formatTime(endOfDay)}",
-        });
-      }
-      return slots;
-    }
-
-    for (var booking in bookings) {
-      final start = _parseBookingTime(booking);
-      final duration = int.tryParse(booking.duration ?? "0") ?? 0;
-      final end = start.add(Duration(minutes: duration));
-      final gapStart = lastEnd.isAfter(now) ? lastEnd : now;
-      final gapEnd = start.subtract(const Duration(minutes: 30));
-      if (gapStart.isBefore(gapEnd)) {
-        final availableDuration = gapEnd.difference(gapStart).inMinutes;
-        if (availableDuration >= 30) {
-          slots.add({
-            "room": device.roomName,
-            "title": "Available",
-            "building": building,
-            "floor": floor,
-            "space": device.capacity.toString(),
-            "host": "",
-            "status": "Available      ${_formatTime(gapStart)}-${_formatTime(gapEnd)}",
-          });
-        }
-      }
-
-      slots.add({
-        "room": device.roomName,
-        "title": booking.meetingTitle,
-        "building": building,
-        "floor": floor,
-        "space": booking.numberOfPeople?.toString() ?? "-",
-        "host": booking.hostName,
-        "status":
-        "${getBookingStatus(booking)}      ${_formatTime(start)}-${_formatTime(end)}",
-      });
-
-      lastEnd = end.add(const Duration(minutes: 30));
-    }
-
-    final endOfDay = DateTime(now.year, now.month, now.day, 23, 59);
-    if (lastEnd.isBefore(endOfDay)) {
-      final gapStart = lastEnd.isAfter(now) ? lastEnd : now;
-      final availableDuration = endOfDay.difference(gapStart).inMinutes;
-      if (availableDuration >= 30) {
-        slots.add({
-          "room": device.roomName,
-          "title": "Available",
-          "building": building,
-          "floor": floor,
-          "space": device.capacity.toString(),
-          "host": "",
-          "status": "Available      ${_formatTime(gapStart)}-${_formatTime(endOfDay)}",
-        });
-      }
-    }
-    return slots;
-  }
-
-  DateTime _parseBookingTime(Booking b) {
-    final parts = b.date.split("/");
-    final d = int.parse(parts[0]);
-    final m = int.parse(parts[1]);
-    final y = int.parse(parts[2]);
-    final t = b.time.split(":");
-    final h = int.parse(t[0]);
-    final min = int.parse(t[1]);
-
-    return DateTime(y, m, d, h, min);
-  }
-
-  String _formatTime(DateTime t) =>
-      "${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(
-          2, '0')}";
-
-  void _checkAndMoveFinishedBookings() async {
-    final now = DateTime.now();
-
-    for (var roomBookings in bookingsByRoom.values) {
-      for (var booking in roomBookings) {
-        final startTime = _parseBookingTime(booking);
-        final durationMinutes = int.tryParse(booking.duration ?? "0") ?? 0;
-        final endTime = startTime.add(Duration(minutes: durationMinutes));
-
-        if (now.isAfter(endTime)) {
-          try {
-            await bookingService.endBooking(int.parse(booking.id));
-            print("Booking ${booking.id} dipindahkan ke history (sudah selesai).");
-          } catch (e) {
-            print("Gagal memindahkan booking ${booking.id} ke history: $e");
-          }
-        }
-      }
-    }
-  }
-
-  String getBookingStatus(Booking booking) {
-    final now = DateTime.now();
-
-    final dateParts = booking.date.split("/");
-    final day = int.parse(dateParts[0]);
-    final month = int.parse(dateParts[1]);
-    final year = int.parse(dateParts[2]);
-
-    final startTimeParts = booking.time.split(":");
-    final startHour = int.parse(startTimeParts[0]);
-    final startMinute = int.parse(startTimeParts[1]);
-    final startTime = DateTime(year, month, day, startHour, startMinute);
-
-    final durationMinutes = int.tryParse(booking.duration ?? "0") ?? 0;
-    final endTime = startTime.add(Duration(minutes: durationMinutes));
-
-    if (now.isAfter(startTime) && now.isBefore(endTime)) {
-      return "Ongoing";
-    } else if (now.isBefore(startTime)) {
-      return "In Queue";
-    } else {
-      return "Finished";
-    }
-  }
+  final BookingService bookingService = BookingService();
 
   @override
   void initState() {
     super.initState();
     _loadMediaLogos();
     _startDateTimeUpdater();
-    _clockStream = Stream.periodic(const Duration(seconds: 1), (i) => i);
     _pageController = PageController();
+
     _pageTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
       if (_pageController.hasClients && _totalPages > 0) {
         final nextPage = _currentPage + 1;
@@ -257,24 +59,34 @@ class _DashboardPageState extends State<DashboardPage> {
         }
       }
     });
-    Timer.periodic(const Duration(seconds: 1), (timer) async {
-      if (!mounted) return;
-      _checkAndMoveFinishedBookings();
-      setState(() {});
-    });
+  }
+
+  Future<void> _loadMediaLogos() async {
+    final mediaList = await MediaService().getAllMedia();
+    if (mediaList.isNotEmpty) {
+      setState(() {
+        logoUrlMain = mediaList[0].logoUrl;
+        logoUrlSub = mediaList[0].subLogoUrl;
+      });
+    }
   }
 
   void _startDateTimeUpdater() {
     _updateDateTime();
-    _timer =
-        Timer.periodic(const Duration(seconds: 1), (_) => _updateDateTime());
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateDateTime());
   }
 
   void _updateDateTime() {
     final now = DateTime.now();
-    _dateString = DateFormat("EEEE, dd MMMM yyyy").format(now);
-    _timeString = DateFormat("HH:mm").format(now);
-    setState(() {});
+    final newDate = DateFormat("EEEE, dd MMMM yyyy").format(now);
+    final newTime = DateFormat("HH:mm").format(now);
+
+    if (_dateString != newDate || _timeString != newTime) {
+      setState(() {
+        _dateString = newDate;
+        _timeString = newTime;
+      });
+    }
   }
 
   @override
@@ -285,11 +97,64 @@ class _DashboardPageState extends State<DashboardPage> {
     super.dispose();
   }
 
+  /// ----------------------------
+  /// Combine devices + bookings
+  /// ----------------------------
+  Stream<Map<String, dynamic>> _dashboardStream({Duration interval = const Duration(seconds: 5)}) async* {
+    final deviceService = DeviceService();
+
+    // Kirim data awal perangkat dulu
+    final devices = await deviceService.getDevices();
+    Map<String, List<Booking>> bookingsMap = {};
+    yield {
+      "devices": devices,
+      "bookingsByRoom": bookingsMap,
+    };
+
+    // Mulai loop periodic
+    await for (final _ in Stream.periodic(interval)) {
+      final today = DateTime.now();
+      bookingsMap = {};
+
+      // Dapatkan booking tiap device (await per device, tapi bisa parallel)
+      await Future.wait(devices.map((device) async {
+        try {
+          final bookings = await bookingService.getBookingsByRoom(device.roomName);
+          bookingsMap[device.roomName] = bookings.where((b) {
+            final date = _parseBookingTime(b);
+            return date.year == today.year &&
+                date.month == today.month &&
+                date.day == today.day;
+          }).toList();
+        } catch (_) {
+          bookingsMap[device.roomName] = [];
+        }
+      }));
+
+      yield {
+        "devices": devices,
+        "bookingsByRoom": bookingsMap,
+      };
+    }
+  }
+
+  DateTime _parseBookingTime(Booking b) {
+    final parts = b.date.split("/");
+    final d = int.parse(parts[0]);
+    final m = int.parse(parts[1]);
+    final y = int.parse(parts[2]);
+    final t = b.time.split(":");
+    final h = int.parse(t[0]);
+    final min = int.parse(t[1]);
+    return DateTime(y, m, d, h, min);
+  }
+
+  String _formatTime(DateTime t) =>
+      "${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}";
+
   int getRowsPerPage(BuildContext context) {
     final media = MediaQuery.of(context);
     final height = media.size.height;
-    final orientation = media.orientation;
-
     final headerHeight = height * 0.10;
     final pageIndicatorHeight = 30.0;
     final availableHeight = height - headerHeight - pageIndicatorHeight - 40;
@@ -297,110 +162,209 @@ class _DashboardPageState extends State<DashboardPage> {
     return (availableHeight / rowHeight).floor();
   }
 
+  List<Map<String, dynamic>> buildAllSlots(
+      List<Device> devices, Map<String, List<Booking>> bookingsByRoom) {
+    List<Map<String, dynamic>> allSlots = [];
+
+    devices.sort((a, b) {
+      return int.tryParse(a.roomName)
+          ?.compareTo(int.tryParse(b.roomName) ?? 0) ??
+          a.roomName.compareTo(b.roomName);
+    });
+
+    for (var i = 0; i < devices.length; i++) {
+      final device = devices[i];
+      final bookings = bookingsByRoom[device.roomName] ?? [];
+      final slots = _buildSlots(device, bookings);
+
+      for (var slot in slots) {
+        slot["roomIndex"] = i;
+      }
+      allSlots.addAll(slots);
+    }
+
+    return allSlots;
+  }
+
+  List<Map<String, dynamic>> _buildSlots(Device device, List<Booking> bookings) {
+    List<Map<String, dynamic>> slots = [];
+
+    final locationParts = device.location.split(" - ");
+    final building = locationParts.isNotEmpty ? locationParts[0].trim() : "";
+    final floor = locationParts.length > 1 ? locationParts[1].trim() : "";
+    final now = DateTime.now();
+    // Jika belum ada booking sama sekali hari ini
+    if (bookings.isEmpty) {
+      slots.add({
+        "room": device.roomName,
+        "title": "Available",
+        "building": building,
+        "floor": floor,
+        "space": device.capacity.toString(),
+        "host": "",
+        "status": "Available ${_formatTime(now)}-23:59",
+      });
+      return slots;
+    }
+    // Jika ada booking, lanjutkan logika slot seperti biasa
+    bookings.sort((a, b) {
+      final aTime = _parseBookingTime(a);
+      final bTime = _parseBookingTime(b);
+      return aTime.compareTo(bTime);
+    });
+    DateTime lastEnd = DateTime(now.year, now.month, now.day, 0, 0);
+
+    for (var booking in bookings) {
+      final start = _parseBookingTime(booking);
+      final duration = int.tryParse(booking.duration ?? "0") ?? 0;
+      final end = start.add(Duration(minutes: duration));
+
+      final gapStart = lastEnd.isAfter(now) ? lastEnd : now;
+      final gapEnd = start.subtract(const Duration(minutes: 30));
+
+      if (gapStart.isBefore(gapEnd) && gapEnd.difference(gapStart).inMinutes >= 30) {
+        slots.add({
+          "room": device.roomName,
+          "title": "Available",
+          "building": building,
+          "floor": floor,
+          "space": device.capacity.toString(),
+          "host": "",
+          "status": "Available ${_formatTime(gapStart)}-${_formatTime(gapEnd)}",
+        });
+      }
+
+      slots.add({
+        "room": device.roomName,
+        "title": booking.meetingTitle,
+        "building": building,
+        "floor": floor,
+        "space": booking.numberOfPeople?.toString() ?? "-",
+        "host": booking.hostName,
+        "status": "${booking.status ?? "Ongoing"} ${_formatTime(start)}-${_formatTime(end)}",
+      });
+
+      lastEnd = end.add(const Duration(minutes: 30));
+    }
+
+    final endOfDay = DateTime(now.year, now.month, now.day, 23, 59);
+    if (lastEnd.isBefore(endOfDay)) {
+      slots.add({
+        "room": device.roomName,
+        "title": "Available",
+        "building": building,
+        "floor": floor,
+        "space": device.capacity.toString(),
+        "host": "",
+        "status": "Available ${_formatTime(lastEnd)}-${_formatTime(endOfDay)}",
+      });
+    }
+
+    return slots;
+  }
+
+  List<List<Map<String, dynamic>>> paginateSlots(List<Map<String, dynamic>> slots, int rowsPerPage) {
+    List<List<Map<String, dynamic>>> pages = [];
+    for (var i = 0; i < slots.length; i += rowsPerPage) {
+      pages.add(slots.sublist(
+        i,
+        (i + rowsPerPage > slots.length) ? slots.length : i + rowsPerPage,
+      ));
+    }
+    return pages;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final isPortrait = media.orientation == Orientation.portrait;
+
     return Scaffold(
       backgroundColor: const Color(0xFFF4F6F9),
       body: Padding(
         padding: const EdgeInsets.all(20.0),
-        child: _buildMainContent(),
-      ),
-    );
-  }
-
-  Widget _buildMainContent() {
-    final media = MediaQuery.of(context);
-    final isPortrait = media.orientation == Orientation.portrait;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // header
-        Row(
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
+            // header
             Row(
-              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                LogoWidget(imageUrlOrBase64: logoUrlMain, height: 40),
-                const SizedBox(width: 8),
-                LogoWidget(imageUrlOrBase64: logoUrlSub, height: 40),
-              ],
-            ),
-            const Expanded(
-              child: Center(
-                child: Text(
-                  "Schedule List",
-                  style: TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF1A237E),
-                  ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    LogoWidget(imageUrlOrBase64: logoUrlMain, height: 40),
+                    const SizedBox(width: 8),
+                    LogoWidget(imageUrlOrBase64: logoUrlSub, height: 40),
+                  ],
                 ),
-              ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Padding(
-                  padding: EdgeInsets.only(top: media.size.height * 0.01),
-                  child: Text(
-                    _dateString,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF1A237E),
+                const Expanded(
+                  child: Center(
+                    child: Text(
+                      "Schedule List",
+                      style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF1A237E),
+                      ),
                     ),
                   ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  _timeString,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF1A237E),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  "${_currentPage + 1}/$_totalPages",
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.black54,
-                  ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Padding(
+                      padding: EdgeInsets.only(top: media.size.height * 0.01),
+                      child: Text(
+                        _dateString,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF1A237E),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _timeString,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF1A237E),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      "${_currentPage + 1}/$_totalPages",
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.black54,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        // content
-        Expanded(
-          child: StreamBuilder<List<Device>>(
-            stream: DeviceService().getDevicesStream(),
-            builder: (context, deviceSnapshot) {
-              final devices = deviceSnapshot.data ?? [];
-              if (devices.isEmpty)
-                return const Center(child: CircularProgressIndicator());
+            const SizedBox(height: 10),
+            // content
+            Expanded(
+              child: StreamBuilder<Map<String, dynamic>>(
+                stream: _dashboardStream(),
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
 
-              return StreamBuilder<Map<String, List<Booking>>>(
-                stream: _bookingsByDeviceStream(devices),
-                builder: (context, bookingSnapshot) {
-                  final bookingsByRoom = bookingSnapshot.data ?? {};
-                  final rowHeight = 60.0;
+                  final devices = snapshot.data!["devices"] as List<Device>;
+                  final bookingsByRoom = snapshot.data!["bookingsByRoom"] as Map<String, List<Booking>>;
+
+                  if (devices.isEmpty) return const Center(child: Text("No devices found"));
+
                   final allSlots = buildAllSlots(devices, bookingsByRoom);
-
-
-                  final availableHeight = media.size.height -
-                      (media.size.height * 0.10) -
-                      30 -
-                      40;
-                  final rowsPerPage = (availableHeight / rowHeight).floor();
-
+                  final rowHeight = 60.0;
+                  final rowsPerPage = getRowsPerPage(context);
                   final pages = paginateSlots(allSlots, rowsPerPage);
                   _totalPages = pages.length;
 
@@ -412,7 +376,6 @@ class _DashboardPageState extends State<DashboardPage> {
                         : const NeverScrollableScrollPhysics(),
                     itemBuilder: (context, pageIndex) {
                       final pageSlots = pages[pageIndex];
-
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
@@ -436,8 +399,7 @@ class _DashboardPageState extends State<DashboardPage> {
                           // Slots
                           Expanded(
                             child: Column(
-                              children: pageSlots
-                                  .mapIndexed((i, s) {
+                              children: pageSlots.mapIndexed((i, s) {
                                 final isAvailable = s["title"] == "Available";
                                 final status = s["status"] ?? "";
                                 final roomIndex = s["roomIndex"] ?? 0;
@@ -448,15 +410,7 @@ class _DashboardPageState extends State<DashboardPage> {
                                 if (status.startsWith("Ongoing")) statusBgColor = Colors.red.withOpacity(0.7);
                                 if (status.startsWith("In Queue")) statusBgColor = Colors.yellow.withOpacity(0.8);
                                 if (status.startsWith("Finished")) statusBgColor = Colors.grey.withOpacity(0.6);
-                                bool isFirstInRoom = false;
-                                if (i == 0) {
-                                  isFirstInRoom = true;
-                                } else {
-                                  final prevRoom = pageSlots[i - 1]["roomIndex"];
-                                  if (prevRoom != roomIndex) {
-                                    isFirstInRoom = true;
-                                  }
-                                }
+                                bool isFirstInRoom = i == 0 || pageSlots[i - 1]["roomIndex"] != roomIndex;
 
                                 return SizedBox(
                                   height: rowHeight,
@@ -506,39 +460,11 @@ class _DashboardPageState extends State<DashboardPage> {
                     },
                   );
                 },
-              );
-            },
-          ),
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
-  }
-  Stream<Map<String, List<Booking>>> _bookingsByDeviceStream(List<Device> devices)
-  {
-    if (devices.isEmpty) return Stream.value({});
-    final today = DateTime.now();
-    final streams = devices.map((device) =>
-        bookingService.streamBookingsByRoom(device.roomName)
-            .map((bookings) {
-          // filter booking hari ini
-          final todayBookings = bookings.where((b) {
-            final bookingDate = _parseBookingTime(b);
-            return bookingDate.year == today.year &&
-                bookingDate.month == today.month &&
-                bookingDate.day == today.day;
-          }).toList();
-
-          return MapEntry(device.roomName, todayBookings);
-        })
-    );
-
-    return CombineLatestStream.list<MapEntry<String, List<Booking>>>(streams)
-        .map((entries) {
-      final map = <String, List<Booking>>{};
-      for (var entry in entries) {
-        map[entry.key] = entry.value;
-      }
-      return map;
-    });
   }
 }

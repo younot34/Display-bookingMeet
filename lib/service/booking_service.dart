@@ -15,8 +15,9 @@ class BookingService {
     throw Exception("Failed to fetch bookings by room");
   }
 
-  Stream<List<Booking>> streamBookingsByRoom(String roomName, {Duration interval = const Duration(seconds: 5)}) {
-    return Stream.periodic(interval).asyncMap((_) => getBookingsByRoom(roomName));
+  Stream<List<Booking>> streamBookingsByRoom(String roomName, {Duration interval = const Duration(seconds: 1)}) async* {
+    yield await getBookingsByRoom(roomName); // tampil cepat pertama kali
+    yield* Stream.periodic(interval).asyncMap((_) => getBookingsByRoom(roomName));
   }
 
   Future<Booking> createBooking(Booking booking) async {
@@ -66,6 +67,4 @@ class BookingService {
       throw Exception("Failed to end booking");
     }
   }
-
-
 }

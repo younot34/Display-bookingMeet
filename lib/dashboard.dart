@@ -100,36 +100,48 @@ class _DashboardPageState extends State<DashboardPage> {
   /// ----------------------------
   /// Combine devices + bookings
   /// ----------------------------
-  Stream<Map<String, dynamic>> _dashboardStream({Duration interval = const Duration(seconds: 5)}) async* {
-    final deviceService = DeviceService();
-
-    // Kirim data awal perangkat dulu
-    final devices = await deviceService.getDevices();
+  Stream<Map<String, dynamic>> _dashboardStream({Duration interval = const Duration(minutes: 30)}) async* {
+    final devices = await DeviceService().getDevices();
     Map<String, List<Booking>> bookingsMap = {};
+
+    // 🔹 Yield pertama → langsung tampil di UI
+    final today = DateTime.now();
+    for (final device in devices) {
+      try {
+        final bookings = await BookingService().getBookingsByRoom(device.roomName);
+        bookingsMap[device.roomName] = bookings.where((b) {
+          final date = _parseBookingTime(b);
+          return date.year == today.year &&
+              date.month == today.month &&
+              date.day == today.day;
+        }).toList();
+      } catch (_) {
+        bookingsMap[device.roomName] = [];
+      }
+    }
     yield {
       "devices": devices,
       "bookingsByRoom": bookingsMap,
     };
 
-    // Mulai loop periodic
+    // 🔹 Loop auto-refresh tiap 30 menit
     await for (final _ in Stream.periodic(interval)) {
-      final today = DateTime.now();
       bookingsMap = {};
+      final now = DateTime.now();
 
-      // Dapatkan booking tiap device (await per device, tapi bisa parallel)
-      await Future.wait(devices.map((device) async {
+      for (final device in devices) {
         try {
-          final bookings = await bookingService.getBookingsByRoom(device.roomName);
+          final bookings = await BookingService().getBookingsByRoom(device.roomName);
           bookingsMap[device.roomName] = bookings.where((b) {
             final date = _parseBookingTime(b);
-            return date.year == today.year &&
-                date.month == today.month &&
-                date.day == today.day;
+            return date.year == now.year &&
+                date.month == now.month &&
+                date.day == now.day;
           }).toList();
         } catch (_) {
           bookingsMap[device.roomName] = [];
         }
-      }));
+      }
 
       yield {
         "devices": devices,
@@ -139,14 +151,17 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   DateTime _parseBookingTime(Booking b) {
-    final parts = b.date.split("/");
-    final d = int.parse(parts[0]);
-    final m = int.parse(parts[1]);
-    final y = int.parse(parts[2]);
-    final t = b.time.split(":");
-    final h = int.parse(t[0]);
-    final min = int.parse(t[1]);
-    return DateTime(y, m, d, h, min);
+    try {
+      // misalnya b.date = "2025-09-22"
+      // misalnya b.time = "14:30"
+      final date = DateFormat("yyyy-MM-dd").parse(b.date);
+      final time = DateFormat("HH:mm").parse(b.time);
+
+      return DateTime(date.year, date.month, date.day, time.hour, time.minute);
+    } catch (e) {
+      debugPrint("❌ Error parsing booking: ${b.date} ${b.time} => $e");
+      return DateTime(1970, 1, 1); // fallback kosong, bukan created_at, bukan now()
+    }
   }
 
   String _formatTime(DateTime t) =>

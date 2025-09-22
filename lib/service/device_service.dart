@@ -14,7 +14,7 @@ class DeviceService {
     }
     throw Exception("Failed to fetch devices");
   }
-  Stream<List<Device>> getDevicesStream({Duration interval = const Duration(seconds: 5)}) async* {
+  Stream<List<Device>> getDevicesStream({Duration interval = const Duration(seconds: 1)}) async* {
     yield await getDevices(); // data pertama kali langsung muncul
     yield* Stream.periodic(interval).asyncMap((_) => getDevices());
   }

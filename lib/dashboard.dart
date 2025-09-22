@@ -31,6 +31,28 @@ class _DashboardPageState extends State<DashboardPage> {
   int _totalPages = 1;
 
   final BookingService bookingService = BookingService();
+  final Set<int> _processedEndedBookings = {};
+
+  void _maybeEndBooking(Booking booking) {
+    final id = booking.id;
+    if (id == null) return;
+    if (_processedEndedBookings.contains(id)) return;
+
+    final start = _parseBookingTime(booking);
+    final duration = int.tryParse(booking.duration ?? "0") ?? 0;
+    final end = start.add(Duration(minutes: duration));
+
+    if (DateTime.now().isAfter(end)) {
+      _processedEndedBookings.add(id as int); // tandai biar gak dobel
+      BookingService().endBooking(id as int).then((_) {
+        debugPrint("✅ booking $id dipindah ke history");
+      }).catchError((e) {
+        debugPrint("❌ gagal end booking $id: $e");
+        _processedEndedBookings.remove(id); // biar coba lagi nanti
+      });
+    }
+  }
+
 
   @override
   void initState() {
@@ -97,24 +119,28 @@ class _DashboardPageState extends State<DashboardPage> {
     super.dispose();
   }
 
-  /// ----------------------------
-  /// Combine devices + bookings
-  /// ----------------------------
   Stream<Map<String, dynamic>> _dashboardStream({Duration interval = const Duration(minutes: 30)}) async* {
     final devices = await DeviceService().getDevices();
     Map<String, List<Booking>> bookingsMap = {};
 
-    // 🔹 Yield pertama → langsung tampil di UI
     final today = DateTime.now();
     for (final device in devices) {
       try {
         final bookings = await BookingService().getBookingsByRoom(device.roomName);
-        bookingsMap[device.roomName] = bookings.where((b) {
+
+        final todays = bookings.where((b) {
           final date = _parseBookingTime(b);
           return date.year == today.year &&
               date.month == today.month &&
               date.day == today.day;
         }).toList();
+
+        // 🔥 cek semua booking hari ini, kalau sudah lewat waktunya → pindah ke history
+        for (final b in todays) {
+          _maybeEndBooking(b);
+        }
+
+        bookingsMap[device.roomName] = todays;
       } catch (_) {
         bookingsMap[device.roomName] = [];
       }
@@ -124,7 +150,6 @@ class _DashboardPageState extends State<DashboardPage> {
       "bookingsByRoom": bookingsMap,
     };
 
-    // 🔹 Loop auto-refresh tiap 30 menit
     await for (final _ in Stream.periodic(interval)) {
       bookingsMap = {};
       final now = DateTime.now();
@@ -152,15 +177,13 @@ class _DashboardPageState extends State<DashboardPage> {
 
   DateTime _parseBookingTime(Booking b) {
     try {
-      // misalnya b.date = "2025-09-22"
-      // misalnya b.time = "14:30"
       final date = DateFormat("yyyy-MM-dd").parse(b.date);
       final time = DateFormat("HH:mm").parse(b.time);
 
       return DateTime(date.year, date.month, date.day, time.hour, time.minute);
     } catch (e) {
       debugPrint("❌ Error parsing booking: ${b.date} ${b.time} => $e");
-      return DateTime(1970, 1, 1); // fallback kosong, bukan created_at, bukan now()
+      return DateTime(1970, 1, 1);
     }
   }
 
@@ -208,7 +231,6 @@ class _DashboardPageState extends State<DashboardPage> {
     final building = locationParts.isNotEmpty ? locationParts[0].trim() : "";
     final floor = locationParts.length > 1 ? locationParts[1].trim() : "";
     final now = DateTime.now();
-    // Jika belum ada booking sama sekali hari ini
     if (bookings.isEmpty) {
       slots.add({
         "room": device.roomName,
@@ -221,7 +243,6 @@ class _DashboardPageState extends State<DashboardPage> {
       });
       return slots;
     }
-    // Jika ada booking, lanjutkan logika slot seperti biasa
     bookings.sort((a, b) {
       final aTime = _parseBookingTime(a);
       final bTime = _parseBookingTime(b);
@@ -233,7 +254,7 @@ class _DashboardPageState extends State<DashboardPage> {
       final start = _parseBookingTime(booking);
       final duration = int.tryParse(booking.duration ?? "0") ?? 0;
       final end = start.add(Duration(minutes: duration));
-
+      String status;
       final gapStart = lastEnd.isAfter(now) ? lastEnd : now;
       final gapEnd = start.subtract(const Duration(minutes: 30));
 
@@ -249,6 +270,14 @@ class _DashboardPageState extends State<DashboardPage> {
         });
       }
 
+      if (now.isBefore(start)) {
+        status = "In Queue ${_formatTime(start)}-${_formatTime(end)}";
+      } else if (now.isAfter(start) && now.isBefore(end)) {
+        status = "Ongoing ${_formatTime(start)}-${_formatTime(end)}";
+      } else {
+        status = "Finished ${_formatTime(start)}-${_formatTime(end)}";
+      }
+
       slots.add({
         "room": device.roomName,
         "title": booking.meetingTitle,
@@ -256,7 +285,7 @@ class _DashboardPageState extends State<DashboardPage> {
         "floor": floor,
         "space": booking.numberOfPeople?.toString() ?? "-",
         "host": booking.hostName,
-        "status": "${booking.status ?? "Ongoing"} ${_formatTime(start)}-${_formatTime(end)}",
+        "status": status,
       });
 
       lastEnd = end.add(const Duration(minutes: 30));
